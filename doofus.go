@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +21,8 @@ const (
 )
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	bot, err := telebot.NewBot(os.Getenv("TOKEN"))
 	if err != nil {
 		log.Fatal(err)
@@ -30,6 +33,11 @@ func main() {
 	for message := range messages {
 		q, ok := isSearch(message.Text)
 		if !ok {
+			continue
+		}
+		if q == "dobis" {
+			msg := dobis[rand.Intn(len(dobis))]
+			bot.SendMessage(message.Chat, msg, nil)
 			continue
 		}
 		cards, err := search(q)
@@ -121,4 +129,19 @@ func (c Card) String() string {
 type Edition struct {
 	Set       string
 	Image_URL string
+}
+
+var dobis = []string{
+	"Just two boys doing business.",
+	"We're Dobis P.R.",
+	"That's who we are.",
+	"Doing business.",
+	`Uh, "Dear Mr. Weebs, We are very, very, very, very excited to meet you. We are Dobis." That's all I've got so far.`,
+	"I'm Tim Heidecker.  This is Eric Wareheim.  We are Dobis P.R., and we're here to tell you about our plan to revitalize the S'wallow Valley Mall.",
+	"That's the pride of Dobis.",
+	"Dobis in the house.",
+	"Official Dobis reps here, stopping in for a meet-and-greet.",
+	"Taquito, we just had a Dobis meeting, and we've decided to let you run the mall fountain.",
+	"I guess I'll just stay here and work on Dobis.",
+	"Guys, tomorrow is our big day, and Dobis couldn't be more jazzed about it.  But right now I want to have a little fun, with the permission of my best friend Tim.\nMuyo permissiono granted.",
 }
