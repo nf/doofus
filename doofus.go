@@ -19,7 +19,7 @@ import (
 
 const (
 	bot        = "DoofusBot"
-	maxMatches = 15
+	maxMatches = 30
 )
 
 func main() {
