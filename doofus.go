@@ -2,16 +2,18 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
-	"net/http"
-	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/broady/mtgprice/mtgprice"
+	"github.com/nf/doofus/deckbrew"
 	"github.com/tucnak/telebot"
 )
 
@@ -23,6 +25,12 @@ const (
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
+	cards, err := mtgprice.Open(mtgprice.Opts{Filename: "mtgprice.kv", CardData: "AllCards.json"})
+	if err != nil {
+		log.Fatal("loading cards:", err)
+	}
+	closeOnTerm(cards)
+
 	bot, err := telebot.NewBot(os.Getenv("TOKEN"))
 	if err != nil {
 		log.Fatal(err)
@@ -30,39 +38,78 @@ func main() {
 	messages := make(chan telebot.Message)
 	bot.Listen(messages, 1*time.Minute)
 
-	for message := range messages {
-		q, ok := isSearch(message.Text)
-		if !ok {
-			continue
+	for msg := range messages {
+		if err := handleMessage(cards, bot, msg); err != nil {
+			log.Printf("Error handling message %v: %v", msg, err)
 		}
-		if q == "dobis" {
-			msg := dobis[rand.Intn(len(dobis))]
-			bot.SendMessage(message.Chat, msg, nil)
-			continue
-		}
-		cards, err := search(q)
-		if err != nil {
-			bot.SendMessage(message.Chat, "Error fetching: "+err.Error(), nil)
-			continue
-		}
-		msg := ""
-		switch len(cards) {
-		case 0:
-			msg = fmt.Sprintf("I don't know what %q is.", q)
-		case 1:
-			msg = cards[0].String()
-		default:
-			if len(cards) > maxMatches {
-				msg = fmt.Sprintf("I know %v cards like %q. Be more specific.", len(cards), q)
-				break
-			}
-			msg = fmt.Sprintf("I know a few cards like %q:", q)
-			for _, c := range cards {
-				msg += "\n  " + c.Name
-			}
-		}
-		bot.SendMessage(message.Chat, msg, nil)
 	}
+}
+
+func closeOnTerm(c io.Closer) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ch
+		log.Printf("shutting down...")
+		if err := c.Close(); err != nil {
+			log.Fatalf("clean up error: %v", err)
+		}
+		os.Exit(1)
+	}()
+}
+
+func handleMessage(cards *mtgprice.Client, bot *telebot.Bot, m telebot.Message) error {
+	reply := func(s string) error { return bot.SendMessage(m.Chat, s, nil) }
+
+	if m.Text == "/dobis" {
+		return reply(dobis[rand.Intn(len(dobis))])
+	}
+
+	q, ok := isSearch(m.Text)
+	if !ok {
+		return nil
+	}
+
+	t0 := time.Now()
+	result, err := cards.Query(q)
+	if err != nil {
+		return reply("Error: " + err.Error())
+	}
+	s := ""
+	switch len(result) {
+	case 0:
+		s = fmt.Sprintf("I don't know what %q is.", q)
+	case 1:
+		ci := result[0]
+
+		img := make(chan string)
+		go func() {
+			m, err := deckbrew.Search(ci.Name)
+			if err != nil || len(m) == 0 || len(m[0].Editions) == 0 {
+				img <- ""
+				return
+			}
+			img <- "\n" + m[0].Editions[0].Image_URL
+		}()
+
+		c, err := cards.RichInfo(ci.Name)
+		if err != nil {
+			return reply("Error: " + err.Error())
+		}
+
+		s = fmt.Sprintf("%s\nTCG %v%s", c.Detail(), c.TCGPrice, <-img)
+		fmt.Println(time.Since(t0))
+	default:
+		if len(result) > maxMatches {
+			s = fmt.Sprintf("I know %v cards like %q. Be more specific.", len(result), q)
+			break
+		}
+		s = fmt.Sprintf("I know a few cards like %q:", q)
+		for _, c := range result {
+			s += "\n  " + c.Name
+		}
+	}
+	return reply(s)
 }
 
 func isSearch(t string) (q string, ok bool) {
@@ -74,61 +121,6 @@ func isSearch(t string) (q string, ok bool) {
 		return strings.TrimPrefix(t, b), true
 	}
 	return "", false
-}
-
-func search(q string) ([]Card, error) {
-	v := url.Values{"name": {q}}
-	r, err := http.Get("http://api.deckbrew.com/mtg/cards?" + v.Encode())
-	if err != nil {
-		return nil, err
-	}
-	var resp []Card
-	err = json.NewDecoder(r.Body).Decode(&resp)
-	r.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	// Do exact match.
-	if len(resp) > 1 {
-		q = strings.ToLower(q)
-		for _, c := range resp {
-			if strings.ToLower(c.Name) == q {
-				return []Card{c}, nil
-			}
-		}
-	}
-	return resp, nil
-}
-
-type Card struct {
-	Name      string
-	Types     []string
-	Power     string
-	Toughness string
-	Cost      string
-	Text      string
-	Editions  []Edition
-}
-
-func (c Card) String() string {
-	s := fmt.Sprintf("%v %v", c.Name, c.Cost)
-	for _, t := range c.Types {
-		if t == "creature" {
-			s += fmt.Sprintf(" (%v/%v)", c.Power, c.Toughness)
-		}
-	}
-	if c.Text != "" {
-		s += "\n" + c.Text
-	}
-	if e := c.Editions; len(e) > 0 {
-		s += "\n" + e[0].Image_URL
-	}
-	return s
-}
-
-type Edition struct {
-	Set       string
-	Image_URL string
 }
 
 var dobis = []string{
