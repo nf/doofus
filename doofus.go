@@ -61,8 +61,11 @@ func closeOnTerm(c io.Closer) {
 func handleMessage(cards *mtgprice.Client, bot *telebot.Bot, m telebot.Message) error {
 	reply := func(s string) error { return bot.SendMessage(m.Chat, s, nil) }
 
-	if m.Text == "/dobis" {
+	switch m.Text {
+	case "/dobis":
 		return reply(dobis[rand.Intn(len(dobis))])
+	case "/help":
+		return reply(helpText)
 	}
 
 	q, ok := isSearch(m.Text)
@@ -89,7 +92,12 @@ func handleMessage(cards *mtgprice.Client, bot *telebot.Bot, m telebot.Message) 
 				img <- ""
 				return
 			}
-			img <- "\n" + m[0].Editions[0].Image_URL
+			u := m[0].Editions[0].Image_URL
+			if u == "https://image.deckbrew.com/mtg/multiverseid/0.jpg" {
+				img <- ""
+				return
+			}
+			img <- "\n" + u
 		}()
 
 		c, err := cards.RichInfo(ci.Name)
@@ -97,7 +105,11 @@ func handleMessage(cards *mtgprice.Client, bot *telebot.Bot, m telebot.Message) 
 			return reply("Error: " + err.Error())
 		}
 
-		s = fmt.Sprintf("%s\nTCG %v%s", c.Detail(), c.TCGPrice, <-img)
+		s = c.Detail()
+		if c.TCGPrice != nil {
+			s += fmt.Sprintf("\nTCG %v", c.TCGPrice)
+		}
+		s += <-img
 		fmt.Println(time.Since(t0))
 	default:
 		if len(result) > maxMatches {
@@ -137,3 +149,5 @@ var dobis = []string{
 	"I guess I'll just stay here and work on Dobis.",
 	"Guys, tomorrow is our big day, and Dobis couldn't be more jazzed about it.  But right now I want to have a little fun, with the permission of my best friend Tim.\nMuyo permissiono granted.",
 }
+
+const helpText = "sorry"
